@@ -103,11 +103,16 @@ new class extends Component {
     cursors: @entangle('mousePositions'),
     smoothCursors: {},
     cursorSpeed: 0.1,
+    userId: '{{ $userId }}',
+    userColor: '{{ $userColors[$userId] }}',
+    lastBroadcastPosition: null,
     init() {
         this.$watch('cursors', (value) => {
             this.updateSmoothCursors(value);
         });
         this.animateCursors();
+        this.setupEcho();
+        this.setupMouseTracking();
     },
     updateSmoothCursors(newCursors) {
         for (let userId in this.smoothCursors) {
@@ -134,8 +139,81 @@ new class extends Component {
             }
         }
         requestAnimationFrame(() => this.animateCursors());
+    },
+    setupEcho() {
+        Echo.join('mouse-movement')
+            .here((users) => {
+                console.log('Here:', users);
+            })
+            .joining((user) => {
+                console.log('Joining:', user);
+            })
+            .leaving((user) => {
+                console.log('Leaving:', user);
+                delete this.cursors[user.id];
+                this.$wire.updateActiveUsersCount();
+            })
+            .listen('MouseMoved', (e) => {
+                this.cursors[e.userId] = e.position;
+                this.$wire.updateActiveUsersCount();
+            });
+    },
+    setupMouseTracking() {
+        const handleMouseMove = (e) => {
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const centerX = viewportWidth / 2;
+            const centerY = viewportHeight / 2;
+
+            const relativePosition = {
+                x: (e.clientX - centerX) / (viewportWidth / 2),
+                y: (e.clientY - centerY) / (viewportHeight / 2)
+            };
+
+            if (!this.lastBroadcastPosition ||
+                this.lastBroadcastPosition.x !== relativePosition.x ||
+                this.lastBroadcastPosition.y !== relativePosition.y) {
+
+                Echo.private('mouse-movement').whisper('MouseMoved', {
+                    userId: this.userId,
+                    position: relativePosition,
+                    color: this.userColor
+                });
+
+                this.lastBroadcastPosition = relativePosition;
+            }
+        };
+
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('touchmove', (e) => handleMouseMove(e.touches[0]));
+
+        document.body.addEventListener('mouseleave', () => {
+            Echo.private('mouse-movement').whisper('MouseMoved', {
+                userId: this.userId,
+                position: null,
+                color: null
+            });
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                Echo.private('mouse-movement').whisper('MouseMoved', {
+                    userId: this.userId,
+                    position: null,
+                    color: null
+                });
+            }
+        });
+
+        window.addEventListener('blur', () => {
+            Echo.private('mouse-movement').whisper('MouseMoved', {
+                userId: this.userId,
+                position: null,
+                color: null
+            });
+        });
     }
-}">
+}" x-init="init">
     <div class="flex items-center justify-center min-h-screen">
         <label for="toggleSwitch" class="flex items-center cursor-pointer">
             <div class="relative">
@@ -151,8 +229,8 @@ new class extends Component {
     <template x-for="(position, userId) in smoothCursors" :key="userId">
         <div class="cursor-dot" x-show="position.active"
             :style="`left: calc(50% + ${position.x * 50}%);
-                                                                    top: calc(50% + ${position.y * 50}%);
-                                                                       background-color: ${$wire.userColors[userId] || '#000000'};`">
+                                                                                                        top: calc(50% + ${position.y * 50}%);
+                                                                                                           background-color: ${$wire.userColors[userId] || '#000000'};`">
         </div>
     </template>
     <div class="fixed bottom-0 right-0 p-4 text-white bg-black bg-opacity-50 rounded-tl-lg">
